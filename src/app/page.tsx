@@ -750,7 +750,7 @@ export default function ApiStudio() {
             <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-white/5">
               <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t.responseOutput}</h3>
               <div className="flex items-center gap-4">
-                {response && (
+                {Boolean(response) && (
                   <div className="flex items-center gap-1 border-r border-white/10 pr-4 mr-2">
                     <button onClick={copyResponse} className="p-1.5 hover:bg-white/10 rounded transition-all text-slate-400 hover:text-blue-400" title="Copy Response">
                       {resCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
