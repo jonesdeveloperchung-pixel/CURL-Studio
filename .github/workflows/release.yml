@@ -1,0 +1,54 @@
+name: Build and Release CURL Studio
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags like v1.0.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Build Portable Version
+        shell: pwsh
+        run: ./scripts/package-portable.ps1
+
+      - name: Zip Portable Version
+        shell: pwsh
+        run: Compress-Archive -Path dist-portable/* -DestinationPath CURL-Studio-Portable-Windows.zip
+
+      - name: Build Standalone Version
+        shell: pwsh
+        run: ./scripts/package-standalone.ps1
+
+      - name: Zip Standalone Version
+        shell: pwsh
+        run: Compress-Archive -Path dist-standalone/* -DestinationPath CURL-Studio-Standalone.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            CURL-Studio-Portable-Windows.zip
+            CURL-Studio-Standalone.zip
+          body: "New release of CURL Studio. Includes Portable (No-Install) and Standalone versions."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
