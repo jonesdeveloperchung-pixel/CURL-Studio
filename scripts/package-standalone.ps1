@@ -38,7 +38,7 @@ if (Test-Path "dev.db") {
 if (Test-Path ".env") {
     Copy-Item ".env" $distDir
 } else {
-    "DATABASE_URL=\"file:./dev.db\"" | Out-File -FilePath "$distDir/.env" -Encoding UTF8
+    'DATABASE_URL="file:./dev.db"' | Out-File -FilePath "$distDir/.env" -Encoding UTF8
 }
 
 # Create a simple launcher

@@ -10,7 +10,9 @@ Write-Host "🚀 Creating Portable One-Click Bundle..." -ForegroundColor Cyan
 
 $portableDir = "dist-portable"
 if (Test-Path $portableDir) { Remove-Item -Recurse -Force $portableDir }
-Copy-Item -Recurse "dist-standalone" $portableDir
+# We use New-Item to ensure the directory exists before we start copying/downloading into it
+New-Item -ItemType Directory -Path $portableDir -Force
+Copy-Item -Recurse "dist-standalone/*" $portableDir
 
 # 2. Download portable Node.js (Windows x64)
 Write-Host "📥 Downloading Portable Node.js..." -ForegroundColor Cyan
