@@ -40,6 +40,7 @@ export const translations = {
     aiAssistant: 'AI 助手',
     promptPlaceholder: '用自然語言描述您的 API 需求...',
     generate: '生成',
+    workspace: '工作區',
   },
   'en': {
     appName: 'CURL Studio',
@@ -80,5 +81,6 @@ export const translations = {
     aiAssistant: 'AI Assistant',
     promptPlaceholder: 'Describe your API needs in natural language...',
     generate: 'Generate',
+    workspace: 'Workspace',
   }
 };
