@@ -1,9 +1,12 @@
 # package-portable.ps1
+$projectRoot = Split-Path -Parent $PSScriptRoot
+Push-Location $projectRoot
+
 # This method bundles a portable Node.js binary with the standalone build
 Write-Host "🚀 Creating Portable One-Click Bundle..." -ForegroundColor Cyan
 
 # 1. Build standalone first
-./scripts/package-standalone.ps1
+& "$PSScriptRoot/package-standalone.ps1"
 
 $portableDir = "dist-portable"
 if (Test-Path $portableDir) { Remove-Item -Recurse -Force $portableDir }
@@ -23,5 +26,6 @@ node.exe server.js
 "@
 $launcher | Out-File -FilePath "$portableDir/CURL-Studio-Portable.bat" -Encoding ASCII
 
+Pop-Location
 Write-Host "✅ Done! Share the '$portableDir' folder." -ForegroundColor Green
 Write-Host "Users can just double-click 'CURL-Studio-Portable.bat' - NO INSTALL REQUIRED!"

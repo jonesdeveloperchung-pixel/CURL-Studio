@@ -1,4 +1,7 @@
 # package-standalone.ps1
+$projectRoot = Split-Path -Parent $PSScriptRoot
+Push-Location $projectRoot
+
 Write-Host "🏗️ Building Next.js Standalone..." -ForegroundColor Cyan
 $env:NEXT_PRIVATE_STANDALONE='true'
 npm run build
@@ -14,7 +17,10 @@ if (Test-Path $distDir) { Remove-Item -Recurse -Force $distDir }
 New-Item -ItemType Directory -Path $distDir
 
 # Copy standalone output
-Copy-Item -Recurse ".next/standalone/*" $distDir
+if (Test-Path ".next/standalone") {
+    Copy-Item -Recurse ".next/standalone/*" $distDir
+}
+
 # Copy static and public assets
 if (Test-Path ".next/static") {
     New-Item -ItemType Directory -Path "$distDir/.next/static" -Force
@@ -23,6 +29,7 @@ if (Test-Path ".next/static") {
 if (Test-Path "public") {
     Copy-Item -Recurse "public" $distDir
 }
+
 # Copy Prisma and DB
 Copy-Item -Recurse "prisma" $distDir
 if (Test-Path "dev.db") {
@@ -37,5 +44,6 @@ if (Test-Path ".env") {
 # Create a simple launcher
 "@echo off`nnode server.js" | Out-File -FilePath "$distDir/start-studio.bat" -Encoding ASCII
 
+Pop-Location
 Write-Host "✅ Done! Share the '$distDir' folder." -ForegroundColor Green
 Write-Host "Users just need Node.js installed and run 'start-studio.bat'."
