@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  binaryTargets = ["native", "windows", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "rhel-openssl-1.0.x", "rhel-openssl-1.1.x", "rhel-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x", "darwin", "darwin-arm64"]
 }
 
 datasource db {
@@ -14,15 +15,19 @@ model Collection {
 }
 
 model Request {
-  id           String      @id @default(uuid())
-  collectionId String?
-  name         String?
-  method       String
-  url          String
-  headers      String      // Store as JSON string
-  body         String?
-  collection   Collection? @relation(fields: [collectionId], references: [id], onDelete: Cascade)
-  createdAt    DateTime    @default(now())
+  id                 String      @id @default(uuid())
+  collectionId       String?
+  name               String?
+  method             String
+  url                String
+  headers            String      // Store as JSON string
+  body               String?
+  protocol           String      @default("HTTP") // HTTP, WebSocket, gRPC
+  preRequestScript   String?
+  postResponseScript String?
+  assertions         String?     // Store as JSON string
+  collection         Collection? @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  createdAt          DateTime    @default(now())
 }
 
 model History {
@@ -32,15 +37,26 @@ model History {
   status    Int
   time      Int
   size      String
+  response  String?  // Store response body for history
+  headers   String?  // Store response headers
   createdAt DateTime @default(now())
 }
 
+model Environment {
+  id        String        @id @default(uuid())
+  name      String
+  variables EnvVariable[]
+  createdAt DateTime      @default(now())
+}
+
 model EnvVariable {
-  id        String   @id @default(uuid())
-  key       String
-  value     String
-  enabled   Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id            String       @id @default(uuid())
+  environmentId String?      // null means global
+  environment   Environment? @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+  key           String
+  value         String
+  enabled       Boolean      @default(true)
+  createdAt     DateTime     @default(now())
 }
 
 model Setting {

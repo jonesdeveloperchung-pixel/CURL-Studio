@@ -101,17 +101,23 @@ export default function ApiStudio() {
 
   // --- State ---
   const [method, setMethod] = useState<Method>('GET');
+  const [protocol, setProtocol] = useState<'HTTP' | 'WS' | 'gRPC'>('HTTP');
   const [url, setUrl] = useState('https://jsonplaceholder.typicode.com/posts/1');
   const [headers, setHeaders] = useState<KVField[]>([{ id: '1', key: 'Content-Type', value: 'application/json', enabled: true }]);
   const [params, setParams] = useState<KVField[]>([]);
   const [body, setBody] = useState('');
-  const [activeTab, setActiveTab] = useState<'params' | 'headers' | 'body'>('headers');
+  const [preRequestScript, setPreRequestScript] = useState('');
+  const [postResponseScript, setPostResponseScript] = useState('');
+  const [activeTab, setActiveTab] = useState<'params' | 'headers' | 'body' | 'scripts' | 'assertions'>('headers');
   const [flavor, setFlavor] = useState<Flavor>('curl');
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<unknown>(null);
-  const [resMetadata, setResMetadata] = useState<ResponseMetadata | null>(null);
+  const [resMetadata, setResMetadata] = useState<ResponseMetadata & { timings?: any; logs?: string[]; tests?: any } | null>(null);
   const [copied, setCopied] = useState(false);
   const [resCopied, setResCopied] = useState(false);
+  const [activeResTab, setActiveResTab] = useState<'body' | 'headers' | 'tests' | 'logs' | 'performance'>('body');
+  const [selectedEnvId, setSelectedEnvId] = useState<string>("");
+  const [dbEnvironments, setDbEnvironments] = useState<any[]>([]);
 
   // --- Keyboard Shortcuts ---
   useEffect(() => {
@@ -149,6 +155,12 @@ export default function ApiStudio() {
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) setCollections(data);
+      });
+
+    fetch('/api/environments')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setDbEnvironments(data);
       });
   }, []);
 
@@ -349,12 +361,16 @@ export default function ApiStudio() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           method,
-          url: resolveVariables(url),
+          protocol,
+          url, // Resolve on server side now
           headers: headers.filter(h => h.enabled && h.key).reduce((acc: Record<string, string>, h) => {
-            acc[h.key] = resolveVariables(h.value);
+            acc[h.key] = h.value;
             return acc;
           }, {}),
-          body: method !== 'GET' ? body : undefined
+          body: method !== 'GET' ? body : undefined,
+          preRequestScript,
+          postResponseScript,
+          environmentId: selectedEnvId
         })
       });
 
@@ -366,31 +382,70 @@ export default function ApiStudio() {
       setResponse(data.body);
       const metadata = {
         status: data.status,
-        time: endTime - startTime,
-        size: data.size || (JSON.stringify(data.body).length / 1024).toFixed(2) + ' KB'
+        time: data.timings?.total || (endTime - startTime),
+        size: data.size || (JSON.stringify(data.body).length / 1024).toFixed(2) + ' KB',
+        timings: data.timings,
+        logs: data.logs,
+        tests: data.tests,
+        headers: data.headers
       };
       setResMetadata(metadata);
 
-      // Save to SQLite
-      fetch('/api/history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          method,
-          url,
-          status: data.status,
-          time: metadata.time,
-          size: metadata.size
-        })
-      }).then(res => res.json()).then(newItem => {
-        setHistory(prev => [newItem, ...prev].slice(0, 50));
-      });
+      // Update local variables if script changed them
+      if (data.variables) {
+        // Handle variable updates if needed
+      }
 
     } catch (err: unknown) {
       setResponse({ error: err instanceof Error ? err.message : String(err) });
       setResMetadata({ status: 0, time: Date.now() - startTime, size: '0 KB' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const suggestAi = async (mode: 'suggest_headers' | 'suggest_assertions') => {
+    if (!aiOnline) return;
+    setAiLoading(true);
+    try {
+      const prompt = mode === 'suggest_headers' 
+        ? `Request to ${url} with method ${method}`
+        : `Response from ${url}: ${JSON.stringify(response).slice(0, 500)}`;
+
+      const res = await fetch('/api/ai/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ollamaIp,
+          model: ollamaModel,
+          prompt,
+          mode
+        })
+      });
+
+      const data = await res.json();
+      if (data.response) {
+        let text = data.response.trim();
+        const jsonMatch = text.match(/\[[\s\S]*\]/) || text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) text = jsonMatch[0];
+        const parsed = JSON.parse(text);
+
+        if (mode === 'suggest_headers') {
+          const newHeaders = Object.entries(parsed).map(([key, value]) => ({
+            id: Math.random().toString(),
+            key,
+            value: value as string,
+            enabled: true
+          }));
+          setHeaders(prev => [...prev, ...newHeaders]);
+        } else {
+          setPostResponseScript(prev => prev + "\n" + (Array.isArray(parsed) ? parsed.join("\n") : ""));
+        }
+      }
+    } catch (e) {
+      console.error("AI Suggestion failed", e);
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -596,9 +651,34 @@ export default function ApiStudio() {
             <div className="space-y-4">
               <div className="flex justify-between items-center px-2">
                 <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t.collections}</h4>
-                <button onClick={() => setIsAddingCollection(true)} className="p-1 hover:bg-white/10 rounded transition-all">
-                  <Plus className="w-3 h-3 text-blue-400" />
-                </button>
+                <div className="flex gap-1">
+                  <button onClick={() => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = '.json';
+                    input.onchange = async (e: any) => {
+                      const file = e.target.files[0];
+                      if (!file) return;
+                      const text = await file.text();
+                      const json = JSON.parse(text);
+                      const res = await fetch('/api/collections/import', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(json)
+                      });
+                      if (res.ok) {
+                         const data = await res.json();
+                         setCollections(prev => [{ ...data, requests: data.requests || [] }, ...prev]);
+                      }
+                    };
+                    input.click();
+                  }} className="p-1 hover:bg-white/10 rounded transition-all" title={t.import}>
+                    <Plus className="w-3 h-3 text-purple-400" />
+                  </button>
+                  <button onClick={() => setIsAddingCollection(true)} className="p-1 hover:bg-white/10 rounded transition-all">
+                    <Plus className="w-3 h-3 text-blue-400" />
+                  </button>
+                </div>
               </div>
               
               {isAddingCollection && (
@@ -620,9 +700,24 @@ export default function ApiStudio() {
                 <div className="space-y-1">
                   {filteredCollections.map(col => (
                     <div key={col.id} className="space-y-1">
-                      <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-slate-400 bg-white/5 rounded-lg">
-                        <FolderOpen className="w-3 h-3" />
-                        {col.name}
+                      <div className="flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-400 bg-white/5 rounded-lg group">
+                        <div className="flex items-center gap-2">
+                          <FolderOpen className="w-3 h-3" />
+                          {col.name}
+                        </div>
+                        <button onClick={async (e) => {
+                          e.stopPropagation();
+                          const res = await fetch(`/api/collections/${col.id}/export`);
+                          const json = await res.json();
+                          const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `${col.name}.postman_collection.json`;
+                          a.click();
+                        }} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded">
+                           <Copy className="w-2.5 h-2.5 text-slate-500 hover:text-blue-400" />
+                        </button>
                       </div>
                       <div className="pl-4 space-y-1">
                         {col.requests.map(req => (
@@ -667,6 +762,16 @@ export default function ApiStudio() {
             <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{t.workspace} / {sidebarView.toUpperCase()}</span>
           </div>
           <div className="flex items-center gap-3">
+             <select 
+               value={selectedEnvId} 
+               onChange={(e) => setSelectedEnvId(e.target.value)}
+               className="bg-slate-900 border border-white/5 rounded-lg px-3 py-1 text-[10px] font-bold text-slate-400 focus:outline-none focus:border-blue-500/50"
+             >
+               <option value="">{t.globalVariables}</option>
+               {dbEnvironments.map(env => (
+                 <option key={env.id} value={env.id}>{env.name}</option>
+               ))}
+             </select>
              <div className={cn(
                "px-3 py-1 rounded-full border text-[10px] font-bold uppercase transition-all",
                systemHealth.curl ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500" : "bg-blue-500/10 border-blue-500/20 text-blue-500"
@@ -681,12 +786,17 @@ export default function ApiStudio() {
           {/* Top: Request Section */}
           <div className="glass rounded-2xl flex flex-col shrink-0 shadow-2xl overflow-hidden">
             <div className="p-4 border-b border-white/5 flex gap-3 bg-white/5">
-              <select value={method} onChange={(e) => setMethod(e.target.value as Method)} className="bg-slate-900 border border-white/10 rounded-xl px-4 py-2 text-sm font-bold text-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all cursor-pointer">
-                {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => <option key={m} value={m}>{m}</option>)}
+              <select value={protocol} onChange={(e) => setProtocol(e.target.value as any)} className="bg-slate-900 border border-white/10 rounded-xl px-2 py-2 text-[10px] font-black text-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all cursor-pointer uppercase">
+                {['HTTP', 'WS', 'gRPC'].map(p => <option key={p} value={p}>{p}</option>)}
               </select>
+              {protocol === 'HTTP' && (
+                <select value={method} onChange={(e) => setMethod(e.target.value as Method)} className="bg-slate-900 border border-white/10 rounded-xl px-4 py-2 text-sm font-bold text-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all cursor-pointer">
+                  {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              )}
               <div className="flex-1 relative">
-                <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/endpoint" className="w-full bg-slate-900 border border-white/10 rounded-xl px-4 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all" />
-                {url.includes('{{') && (
+                <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={protocol === 'WS' ? "ws://echo.websocket.org" : "https://api.example.com/endpoint"} className="w-full bg-slate-900 border border-white/10 rounded-xl px-4 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all" />
+                {(url.includes('{{') || selectedEnvId) && (
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none">
                     <span className="text-[8px] font-black text-purple-500 uppercase bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20">Vars Active</span>
                   </div>
@@ -702,16 +812,22 @@ export default function ApiStudio() {
             </div>
 
             <div className="h-64 flex flex-col overflow-hidden">
-              <div className="flex border-b border-white/5 px-4 bg-white/5 shrink-0">
-                {[ { id: 'params', label: t.params }, { id: 'headers', label: t.headers }, { id: 'body', label: t.body }].map(tab => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={cn("px-6 py-3 text-[10px] font-bold uppercase tracking-widest transition-all border-b-2", activeTab === tab.id ? "border-blue-500 text-blue-400" : "border-transparent text-slate-500 hover:text-slate-300")}>
+              <div className="flex border-b border-white/5 px-4 bg-white/5 shrink-0 overflow-x-auto">
+                {[ 
+                  { id: 'params', label: t.params }, 
+                  { id: 'headers', label: t.headers }, 
+                  { id: 'body', label: t.body },
+                  { id: 'scripts', label: t.scripts },
+                  { id: 'assertions', label: t.assertions }
+                ].map(tab => (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={cn("px-6 py-3 text-[10px] font-bold uppercase tracking-widest transition-all border-b-2 whitespace-nowrap", activeTab === tab.id ? "border-blue-500 text-blue-400" : "border-transparent text-slate-500 hover:text-slate-300")}>
                     {tab.label}
                   </button>
                 ))}
               </div>
 
               <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
-                {activeTab !== 'body' ? (
+                {['params', 'headers'].includes(activeTab) ? (
                   <div className="space-y-3">
                     {(activeTab === 'headers' ? headers : params).map((field) => (
                       <div key={field.id} className="flex gap-3 group items-center">
@@ -723,8 +839,27 @@ export default function ApiStudio() {
                     ))}
                     <button onClick={() => addField(activeTab === 'headers' ? setHeaders : setParams)} className="flex items-center gap-2 text-[10px] text-blue-500 hover:text-blue-400 font-bold uppercase tracking-widest py-2 px-1 transition-all"><Plus className="w-3 h-3" /> {t.addRow}</button>
                   </div>
-                ) : (
+                ) : activeTab === 'body' ? (
                   <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder='{"key": "value"}' className="w-full h-full bg-slate-900/50 border border-white/10 rounded-xl p-4 text-xs font-mono text-blue-100 focus:outline-none focus:border-blue-500/50 resize-none custom-scrollbar" />
+                ) : activeTab === 'scripts' ? (
+                  <div className="h-full flex flex-col gap-4">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t.preRequest}</label>
+                      <button onClick={() => setPreRequestScript("// pm.variables.set('token', 'abc');\npm.request.headers.set('X-Token', 'abc');")} className="text-[9px] text-blue-400 hover:underline">Insert Example</button>
+                    </div>
+                    <textarea value={preRequestScript} onChange={(e) => setPreRequestScript(e.target.value)} placeholder="pm.request.headers.set('Key', 'Value');" className="w-full h-full bg-slate-900/50 border border-white/10 rounded-xl p-4 text-xs font-mono text-emerald-100 focus:outline-none focus:border-emerald-500/50 resize-none custom-scrollbar" />
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col gap-4">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t.postResponse}</label>
+                      <div className="flex gap-2">
+                        <button onClick={() => setPostResponseScript(postResponseScript + "\npm.test('Status is 200', () => { pm.response.to.be(200); });")} className="text-[9px] text-blue-400 hover:underline">Add Status Test</button>
+                        <button onClick={() => suggestAi('suggest_assertions')} className="text-[9px] text-purple-400 hover:underline flex items-center gap-1"><Sparkles className="w-2 h-2" /> AI Suggest</button>
+                      </div>
+                    </div>
+                    <textarea value={postResponseScript} onChange={(e) => setPostResponseScript(e.target.value)} placeholder="pm.test('Status is 200', () => { pm.response.to.be(200); });" className="w-full h-full bg-slate-900/50 border border-white/10 rounded-xl p-4 text-xs font-mono text-purple-100 focus:outline-none focus:border-purple-500/50 resize-none custom-scrollbar" />
+                  </div>
                 )}
               </div>
             </div>
@@ -747,41 +882,142 @@ export default function ApiStudio() {
 
           {/* Bottom: Response Section */}
           <div className="flex-1 glass rounded-2xl flex flex-col shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-white/5">
-              <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t.responseOutput}</h3>
-              <div className="flex items-center gap-4">
-                {Boolean(response) && (
-                  <div className="flex items-center gap-1 border-r border-white/10 pr-4 mr-2">
-                    <button onClick={copyResponse} className="p-1.5 hover:bg-white/10 rounded transition-all text-slate-400 hover:text-blue-400" title="Copy Response">
-                      {resCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                    </button>
-                    <button onClick={downloadResponse} className="p-1.5 hover:bg-white/10 rounded transition-all text-slate-400 hover:text-blue-400" title="Download JSON">
-                      <Plus className="w-3.5 h-3.5 rotate-45" />
-                    </button>
-                  </div>
-                )}
-                {resMetadata && (
-                  <div className="flex gap-6 items-center">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] text-slate-500 uppercase font-bold tracking-tighter">{t.status}:</span>
-                      <span className={cn("text-xs font-black", resMetadata.status >= 200 && resMetadata.status < 300 ? "text-emerald-400" : "text-red-400")}>{resMetadata.status || 'ERROR'}</span>
-                    </div>
-                    <div className="flex items-center gap-2 border-l border-white/10 pl-6"><Clock className="w-3 h-3 text-slate-500" /><span className="text-xs font-bold text-slate-300">{resMetadata.time} <span className="text-[9px] text-slate-500">MS</span></span></div>
-                    <div className="flex items-center gap-2 border-l border-white/10 pl-6"><Zap className="w-3 h-3 text-slate-500" /><span className="text-xs font-bold text-slate-300">{resMetadata.size}</span></div>
-                  </div>
-                )}
+          {/* Bottom: Response Section */}
+          <div className="flex-1 glass rounded-2xl flex flex-col shadow-2xl overflow-hidden min-h-0">
+            <div className="px-6 py-2 border-b border-white/5 flex items-center justify-between bg-white/5 shrink-0">
+              <div className="flex gap-1">
+                {[
+                  { id: 'body', label: 'Body' },
+                  { id: 'headers', label: 'Headers' },
+                  { id: 'tests', label: 'Tests' },
+                  { id: 'logs', label: 'Logs' },
+                  { id: 'performance', label: 'Timings' }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveResTab(tab.id as any)}
+                    className={cn(
+                      "px-4 py-3 text-[10px] font-bold uppercase tracking-widest transition-all border-b-2",
+                      activeResTab === tab.id ? "border-blue-500 text-blue-400" : "border-transparent text-slate-500 hover:text-slate-300"
+                    )}
+                  >
+                    {tab.label}
+                    {tab.id === 'tests' && resMetadata?.tests && ` (${Object.keys(resMetadata.tests).length})`}
+                  </button>
+                ))}
               </div>
+              
+              {resMetadata && (
+                <div className="flex gap-4 items-center">
+                  <div className="flex items-center gap-1.5 px-3 py-1 bg-white/5 rounded-full border border-white/5">
+                    <div className={cn("w-1.5 h-1.5 rounded-full", resMetadata.status >= 200 && resMetadata.status < 300 ? "bg-emerald-500" : "bg-red-500")} />
+                    <span className={cn("text-[10px] font-black", resMetadata.status >= 200 && resMetadata.status < 300 ? "text-emerald-400" : "text-red-400")}>
+                      {resMetadata.status}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-4 text-[10px] font-bold text-slate-500">
+                    <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {resMetadata.time.toFixed(0)} ms</span>
+                    <span className="flex items-center gap-1"><Zap className="w-3 h-3" /> {resMetadata.size}</span>
+                  </div>
+                </div>
+              )}
             </div>
+
             <div className="flex-1 overflow-auto p-6 custom-scrollbar bg-slate-900/20">
-              {response ? (
-                <pre className="text-xs font-mono text-blue-200 whitespace-pre-wrap leading-relaxed">{JSON.stringify(response, null, 2)}</pre>
-              ) : (
+              {response === null ? (
                 <div className="h-full flex flex-col items-center justify-center opacity-10">
                   <Globe className="w-16 h-16 mb-4" />
                   <p className="text-sm font-bold uppercase tracking-widest">{t.readyForTransmission}</p>
                 </div>
+              ) : (
+                <>
+                  {activeResTab === 'body' && (
+                    <div className="relative group h-full">
+                      {response === "" || response === undefined ? (
+                        <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-2 opacity-50">
+                          <Terminal className="w-8 h-8" />
+                          <p className="text-[10px] font-bold uppercase tracking-widest">Response body is empty</p>
+                        </div>
+                      ) : (
+                        <>
+                          <pre className="text-xs font-mono text-blue-200 whitespace-pre-wrap leading-relaxed bg-black/40 p-6 rounded-2xl border border-white/5 h-full overflow-auto custom-scrollbar">
+                            {typeof response === 'object' ? JSON.stringify(response, null, 2) : String(response)}
+                          </pre>
+                          <button 
+                            onClick={copyResponse}
+                            className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 p-2 bg-slate-800 hover:bg-slate-700 rounded-lg transition-all text-slate-400"
+                          >
+                            {resCopied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {activeResTab === 'headers' && resMetadata?.headers && (
+                    <div className="space-y-2">
+                      <div className="bg-black/20 rounded-xl p-4 border border-white/5 space-y-1">
+                        {Object.entries(typeof resMetadata.headers === 'string' ? JSON.parse(resMetadata.headers) : resMetadata.headers).map(([key, value]) => (
+                          <div key={key} className="flex gap-4 text-[10px] font-mono border-b border-white/5 pb-1 last:border-0">
+                            <span className="text-blue-400 w-48 shrink-0 select-all font-bold">{key}</span>
+                            <span className="text-slate-400 break-all select-all">{value as string}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeResTab === 'tests' && (
+                    <div className="space-y-3">
+                      {resMetadata?.tests && Object.keys(resMetadata.tests).length > 0 ? (
+                        Object.entries(resMetadata.tests).map(([name, passed]) => (
+                          <div key={name} className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/5">
+                            {passed ? <Check className="w-4 h-4 text-emerald-500" /> : <Plus className="w-4 h-4 text-red-500 rotate-45" />}
+                            <span className={cn("text-xs font-medium", passed ? "text-emerald-400" : "text-red-400")}>{name}</span>
+                            <span className="ml-auto text-[10px] font-black uppercase tracking-tighter px-2 py-0.5 rounded bg-white/5">{passed ? 'Passed' : 'Failed'}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-center py-10 text-slate-600 text-[10px] font-bold uppercase tracking-widest">No assertions defined</div>
+                      )}
+                    </div>
+                  )}
+
+                  {activeResTab === 'logs' && (
+                    <div className="bg-black/40 rounded-xl p-4 font-mono text-[11px] text-slate-400 space-y-1 border border-white/5 min-h-[100px]">
+                      {resMetadata?.logs && resMetadata.logs.length > 0 ? (
+                        resMetadata.logs.map((log, i) => <div key={i} className="flex gap-2"><span className="text-slate-700">{i+1}</span><span className="text-blue-500/50">|</span>{log}</div>)
+                      ) : (
+                        <div className="text-slate-700 italic">Console is empty...</div>
+                      )}
+                    </div>
+                  )}
+
+                  {activeResTab === 'performance' && resMetadata?.timings && (
+                    <div className="space-y-6">
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        {[
+                          { label: 'DNS Lookup', value: resMetadata.timings.dns, color: 'text-blue-400' },
+                          { label: 'TCP Connection', value: resMetadata.timings.tcp, color: 'text-emerald-400' },
+                          { label: 'TLS Handshake', value: resMetadata.timings.tls, color: 'text-purple-400' },
+                          { label: 'TTFB', value: resMetadata.timings.ttfb, color: 'text-amber-400' },
+                          { label: 'Data Transfer', value: resMetadata.timings.transfer, color: 'text-cyan-400' },
+                          { label: 'Total Time', value: resMetadata.timings.total, color: 'text-white' },
+                        ].filter(t => typeof t.value === 'number' && (t.value > 0 || t.label === 'Total Time')).map(time => (
+                          <div key={time.label} className="p-4 rounded-2xl bg-white/5 border border-white/5 group hover:border-white/10 transition-all">
+                            <div className="text-[9px] font-black text-slate-600 uppercase mb-2 tracking-tighter">{time.label}</div>
+                            <div className={cn("text-lg font-black", time.color)}>
+                              {(time.value as number).toFixed(2)} <span className="text-[10px] font-bold opacity-40">ms</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
+          </div>
           </div>
         </div>
 

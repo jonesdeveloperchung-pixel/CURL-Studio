@@ -4,20 +4,15 @@
 
 CURL 工作室是一個為開發者與 QA 工程師打造的專業 Web 版 API 客戶端。它將 `curl` 的強大功能與 Postman 般的直觀介面完美結合，並內建 AI 助手與多重容錯機制。
 
-## ✨ 核心特性
+## 核心特性 (Key Features)
 
-- **視覺化請求建構器**: 支援 GET, POST, PUT, DELETE 等所有主流 HTTP 方法。
-- **雙重執行引擎**:
-  - **二進位模式**: 優先使用系統內建的 `curl` 指令執行，確保與命令列行為一致。
-  - **程式化模式**: 若系統缺乏 `curl`，自動切換至原生 `fetch` 引擎。
-- **AI 助手 (Ollama 驅動)**: 透過自然語言描述 API 需求，自動生成完整的請求參數、標頭與主體。
-- **智慧集合與歷史**:
-  - **集合 (Collections)**: 將常用請求分類儲存。
-  - **歷史 (History)**: 自動記錄每次發送的細節與回應。
-  - **SQLite 儲存**: 使用 Prisma 7 進行高效且持久的本地數據管理。
-- **變數與環境管理**: 支援 `{{variable}}` 語法，可在不同環境（如開發、測試、正式）間輕鬆切換。
-- **即時預覽**: 實時生成標準 cURL 與 PowerShell (`Invoke-WebRequest`) 指令碼。
-- **進階 UX**: 支援 `Ctrl + Enter` 快捷發送、全域搜尋以及回應下載。
+- **AI 驅動**: 自然語言生成 API 請求，智慧建議 Header 與測試斷言。
+- **全方位協議**: 支援 HTTP/HTTPS, WebSocket 以及 gRPC 測試。
+- **自動化開發**: 內建 JavaScript 腳本引擎，支援 Pre-request 與 Post-response 斷言。
+- **效能監控**: 毫秒級效能剖析，細分 DNS, TCP, TLS 與傳輸耗時。
+- **生態兼容**: 支援 Postman 集合匯入與匯出。
+- **隱私安全**: 所有資料存儲於本地 SQLite，不經過第三方伺服器（AI 請求除外）。
+- **跨平台**: 提供 Windows, macOS 與 Linux 的獨立執行檔。
 
 ## 📸 介面截圖 (Screenshots)
 
